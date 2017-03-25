@@ -2,408 +2,242 @@ name: inverse
 layout: true
 class: center, middle, inverse
 ---
-# Singularity on Openmind
-### satra@mit.edu
+# Executing Nipype pipelines in parallel on multi-core workstations
+## R. Cameron Craddock, PhD
+### cameron.craddock@gmail.com
+### Director of Computational Neuroimaging Lab, Nathan S. Kline Institute for Psychiatric Research, Orangeburg, NY
+### Director of Imaging, Child Mind Institute, New York, NY
+
 ---
-Many thanks to the Singularity team
+Adapted from example by Dr. Satra Ghosh
 
-[source](https://github.com/satra/om-images/tree/gh-pages) | CC-BY
+(https://github.com/satra/om-images)
 
-(You can update this presentation - just send a pull-request)
----
-layout: false
-### Software Dependencies and Reproducible Research
 
-- Each project in a lab depends on complex software environments
-  - Operating system
-  - Drivers
-  - Software dependencies
-     - Python/MATLAB/R versions
-     - glibc
-     - various other libraries, executables
+[source](https://github.com/ccraddock/nipype-multicore-hpc/tree/gh-pages) | CC-BY
 
---
-- Each project has its own timeline
-  - Maintaining common software repositories is "Oh so 20th century!"
-  - Really hard on systems like Openmind
-     - One of these days modules will clash
-
---
-- Reproducible research requires consistent computing environments
-  - Data **AND** code **AND** compute environments
-  - Passing environments has not been straightforward
----
-### Virtual Machines and Container Technologies
-
-- Main idea: Isolate the computing environment
-  - Corollary: Allow regenerating computing environments
-
---
-- Types:
-  - Virtual Machines
-     - [Virtualbox](https://www.virtualbox.org/)
-     - [VMware](http://www.vmware.com/)
-     - [AWS](http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/AMIs.html), [Google Compute](https://cloud.google.com/compute/), ...
-  - Containers
-     - [Docker](https://www.docker.com/)
-     - [runc](https://runc.io/)
-     - [lxc/lxd](https://linuxcontainers.org/)
-     - [Singularity](http://singularity.lbl.gov/)
-
---
-- The details differ (and matter depending on application)
-  - [Singularity vs everything else](http://singularity.lbl.gov/faq#general-singularity-info)
----
-### The ecosystem: Vagrant, Docker and GitHub
-
-- Vagrant boxes for Virtual Machines
-    - Vagrant can be scripted with a Vagrantfile
-
---
-- Docker + Dockerhub has created an ecosystem of Containers
-    - Dockerhub integrates with GitHub
-    - Create a specification (Dockerfile) on GitHub
-    - Create an integration between GitHub and Dockerhub
-    - Dockerhub will automatically build when you change the specification
-
---
-- Can we do this on Openmind?
-    - We **can** run Vagrant on Openmind
-    - We **cannot** run docker on Openmind
-        - Primarily because of security (root escalation possible)
----
-template: inverse
-
-![containervsvm](http://www.bogotobogo.com/DevOps/Docker/images/Docker_vs_Virtual_Machine/Virtual_Machine_vs_Docker_Container.png)
----
-template: inverse
-
-### We want containers
-### VMs are too heavy
-### Docker is not allowed
+(Feel free to fork and update)
 ---
 layout: false
-### Enter [Singularity](http://singularity.lbl.gov/user-guide)
+### Neuroimaging processing and analyses are "trivially" parallelizable
 
-[Singularity](http://singularity.lbl.gov/user-guide) was built for HPC, to support containerized environments, and to support reproducible science.
-
-<div style="position:relative;height:0;padding-bottom:56.25%"><iframe src="https://www.youtube.com/embed/h5rDnCA3NJA?ecver=2&start=252" frameborder="0" style="position:absolute;width:100%;height:100%;left:0" allowfullscreen></iframe></div>
-.right[A FlyElephant Webinar]
----
-template: inverse
-## The Singularity workflow
-
-<img src="assets/singularity_workflow.png" width="100%" />
----
-### Let's start with an example
-
-I needed to send DICOMs to a DICOM receiver. I could
-- write something in python, or
-- compile dcmtk to give me an executable called `storescu`.
---
-
-## OR
-
---
-```bash
-# Add singularity
-$ module add openmind/singularity/2.2.1
-```
---
-```bash
-# Download a container and go in
-$ singularity shell -B /some_om_path:/mnt docker://ggonzale/dcmtk
-```
---
-```bash
-# Send dicoms from within this environment
-> storescu -aec AEC +sd +sp MR* -v somehost 8104 /mnt/path_to_dicoms
-```
---
-I did not need to download and compile code or talk to a system administrator.
----
-name: agenda
-
-### Singularity on Openmind
-
-What we will cover in the remaining time!
-
-0. Environment variables
-1. Running a docker image
-   - what's the difference between a docker container and a singularity container
-   - how to resolve mounting /om
-2. Writing specifications to create images
-   - Using [GitHub](https://github.com):
-      - Dockerfile for [Dockerhub](https://hub.docker.com/)
-      - Singularity for [Singularity-hub](https://singularity-hub.org/)
-3. Using [Vagrant](https://www.vagrantup.com/) to create an image
-   - Openmind peculiarities (vagrant dir, vbox vm dir)
-   - using /dev/shm to create images
-4. Creating and using a singularity image that uses a GPU
-5. Q&A
-
----
-
-### Environment variables
-
-**Singularity related variables**
-
-- `$SINGULARITY_CACHEDIR` controls where containers are downloaded to or expanded
-- `$HOME` is mounted into the container
-    - so anything on `$PATH` that exists in `$HOME` is available inside the container
-- Environment variables are carried over
-    - just like `srun/sbatch`
-    - Understand: `$PATH`, `$LD_LIBRARY_PATH`, `$PYTHONPATH`, `$OMP_NUM_THREADS`, ``$CUDA_VISIBLE_DEVICES`, etc.,.
-
-**Vagrant related variables**
-
-- `$VAGRANT_HOME` - location of vagrant directory
-- `machinefolder` a property for Virtualbox that determines locations of _**running**_ virtual machines.
-
----
-### Let's get started
-
-We need to set up our environment. We will use the interactive queue so that we can do things during this tutorial. (But it will be limited to 32 participants)
-
-```bash
-# Get on a compute node interactively
-$ srun -N1 -c2 -p om_interactive --pty bash
-
-# Execute all commands on the compute node
-$ module add openmind/singularity/2.2.1
-
-# for this tutorial we will use scratch
-$ mkdir /om/scratch/Thu/`whoami`
-$ mkdir /om/scratch/Thu/`whoami`/st
-$ mkdir /om/scratch/Thu/`whoami`/st/cache
-
-# These images can be large, so store them across disks
-$ lfs setstripe -c -1 /om/scratch/Thu/`whoami`/st/cache
-
-# We will use this location to download and store images
-$ export SINGULARITY_CACHEDIR=/om/scratch/Thu/`whoami`/st/cache
-$ cd /om/scratch/Thu/`whoami`/st
-```
-
----
-
-### Example 1: Running a docker image
-
-Let's run a tiny docker image
-
-```bash
-# Still on compute node
-$ ls /etc
-$ singularity shell docker://busybox
-
-# Inside container
-> ls /etc
-> whoami
-> ls $HOME
-```
-<br/>
-Now let's exit the container and get a more extensive image.
-```bash
-> exit
-
-$ singularity shell docker://tensorflow/tensorflow:1.0.0-gpu-py3
-> /usr/bin/python -c "import tensorflow as tf"
-> exit
-```
-
----
-
-### Example 1: continued
-
-Now let's look at a few things after exiting the container
-
-```bash
-$ ls cache
-$ singularity shell cache/singularity-rundir.*/tensorflow/*1.0.0-gpu-py3/
-
-> ls /om
-> exit
-```
-<br />
-Oops, we need our data. First we need to create a bind point inside the container.
-
-```bash
-$ pushd cache/singularity-rundir.*/tensorflow/*1.0.0-gpu-py3/
-$ mkdir om
-$ popd
-$ singularity shell -B /om:/om cache/singularity-rundir.*/tensorflow/*1.0.0-gpu-py3/
-
-> ls /om/user/`whoami`
-```
-
----
-
-### Moving from images to specifications
-
-Sharing images is great for repeatability
-- What if you wanted to modify the image?
-- What if you wanted to know what is inside the image?
+#### Pipeline nodes can be run in parallel if they have no inter-dependencies
 
 --
 
-Look at the specification
+- Data from different participants or sessions have few (if any) inter-dependencies
+  - An exception would be using study-specific templates and priors, but these could be generated first
 
 --
 
-There are two types of specifications you can use:
-1. `Dockerfile` to build an image using docker or [dockerhub](https://hub.docker.com/) and then convert to Singularity
-2. A `Singularity` file to create an image using singularity (needs root privileges) or [singularity hub](https://singularity-hub.org/).
-
-For using either hub, you will need to create an account on GitHub, and create a project that you then link with the Hub.
-
----
-
-### A simple Singularity specification
-
-```bash
-BootStrap: Docker
-From: debian:8.5
-```
---
-
-So one can bootstrap from Docker, but you can bootstrap straight from Debian.
-
-```bash
-BootStrap: debootstrap
-OSVersion: stable
-MirrorURL: http://ftp.us.debian.org/debian/
-
-
-%runscript
-    echo "This is what happens when you run the container..."
-
-
-%post
-    echo "Hello from inside the container"
-    apt-get update
-    apt-get -y install vim
-```
-
----
-
-### Singularity and GitHub
-
-- [Examples of bootstrap files](https://github.com/singularityware/singularity/tree/master/examples)
-
-- [Example Github project for Openmind](https://github.com/satra/om-images)
-
-- [Singularity Hub builds](https://singularity-hub.org/collections/60/)
-
----
-### Using Vagrant to create an image
-
-A few things about Openmind
-
-- Vagrant terminology: `box`, `virtual machine`
-  - Vagrant downloads, builds and exports boxes
-  - VirtualBox creates and runs Virtual Machines
-- Vagrant stores boxes in `$VAGRANT_HOME`
-- Virtualbox stores VMs in `machinefolder`
-  - defaults to `$HOME/VirtualBox VMs`
+- Data from different series collected on same participant and session have some inter-dependencies but are mostly independent
+  - fMRI processing requires some information from structural MRI
+  - Multiple series may be registered to one another
 
 --
 
-- Each user has a quota of 5G in `$HOME`
-
---
-## IF YOU ARE CURRENTLY RUNNING A VM STOP
+- Different processing steps on the same series tend to have inter-dependencies although exceptions exist
 
 --
 
-**Note:** The following changes can impact the VM
+- Many processing algorithms treat each voxel separately
+  - This level of processing is less often accessible to Nipype
 
-```bash
-export VAGRANT_HOME=$PWD/vagrant
-vboxmanage setproperty machinefolder $PWD/VBVMs
-```
-.footnote[ .red[\*] Instead of `$PWD` you can create and use ``` /dev/shm/\`whoami\` ``` to speed things up!]
----
-### Using Vagrant to create an image
+--
 
-First create a bootstrap file and name it Singularity. This will specify what your image contains
-
-```bash
-BootStrap: Docker
-From: debian:8.5
-
-%post
-   mkdir /om
-   mkdir /cm
-```
----
-### Spin up Virtual Machine and install singularity
-
-```bash
-$ vagrant init ubuntu/trusty64
-$ vagrant up
-$ vagrant ssh -c /bin/sh <<EOF
-   sudo apt-get update
-   sudo apt-get -y install build-essential
-   sudo apt-get -y install curl git man vim autoconf libtool
-   git clone https://github.com/singularityware/singularity.git
-   cd singularity
-   ./autogen.sh
-   ./configure --prefix=/usr/local
-   make
-   sudo make install
-EOF
-$ vagrant ssh
-```
+- Monte Carlo methods for statistical significance testing involve many independent iterations
 
 ---
-### Creating the singularity image inside the VM
+### Identifying parallelism
 
-```bash
-$ sudo singularity create -s 2048 debian.img
-$ sudo singularity bootstrap debian.img /vagrant/Singularity
-$ singularity shell debian.img
-$ cp debian.img /vagrant
-$ exit
+<img src="assets/example_pipeline.jpg" width=720>
+
+<sup><sub>from Gorgolewski, K. et al. Front. Neuroinform., 22 August 2011 | [https://doi.org/10.3389/fninf.2011.00013](https://doi.org/10.3389/fninf.2011.00013)
+
+---
+### Benefits of parallel execution
+
+The speedup obtained via parallel execution is determined by Amdahl's Law
+
+<img src="assets/amdahls_law.png" width=800>
+<sup><sub>from https://www.pugetsystems.com/labs/articles/Estimating-CPU-Performance-using-Amdahls-Law-619/</sub></sup>
+
+- Practically it can be difficult to achieve perfect speedup (i.e. S(n) = n) due to a variety of "bottlenecks" --- even when executing completely independent pipelines on separate nodes of a cluster!
+
+  - access to shared resources must be serialized to avoid errors
+  - increased traffic on system bus or network slows throughput
+
+---
+### Maximizing speedup
+
+- Minimize network traffic
+  - execute nodes with inter-dependencies on the same workstation or cluster node
+
+- Minimize use of shared resources
+  - use local storage for intermediate files and only write outputs to shared storage
+
+- Maximize the utilization of system resources
+  - unused processors and memory are wasted resources
+  - must be careful *NOT* to overwhelm resources
+
+---
+### Resource management
+
+- Executing more threads than available processors (not so bad)
+  - Doesn't really cause a problem, system will "slog away" until processing is done
+  - System may become less responsive for interactive users
+
+--
+
+- Using more memory than available RAM (**<span style="color:red">this is BAD!</span>**)
+  - Results in system grinding to a halt as memory is swapped in and out of hard drive at each task switch
+  - System will eventually become completely unresponsive
+  - If available, out-of-memory killer will kill your pipeline to free memory
+  - May require hard reboot to recover the workstation, which can(and often does) result in file system corruption
+
+--
+
+- Filling up hard drive (**<span style="color:red">this is BAD!</span>**)
+  - Will crash your pipeline
+
+---
+### Nipype tricks for resource management on multi-core systems
+
+A common issue exists when one or more node requires a substantial amount of memory, while executing the node alone may be OK, executing it at the same time as other nodes may exceed resources and cause havoc. Possible solutions:
+
+- Run all nodes serially
+  - <span style="color:red">CON: nodes with smaller memory requirements are forced to run serially, wasting system resources</span>
+
+--
+
+- Add dependencies between nodes to prevent them from executing in parallel --- allowing other nodes to execute in parallel
+  - <span style="color:red">CON: is a static solution that requires a lot of effort to implement and does not automatically adapt to systems with larger resources</span>
+
+--
+
+**(Relatively) New solution**
+- Add functionality to MultiProc plugin to execute nodes based on their needs and real-time estimates of available resources
+
+---
+### Specifying node requirements
+
+The interface base class contains estimates of the amount of memory and number of threads required to execute a node:
+
+```python
+def __init__(self, from_file=None, **inputs):
+    if not self.input_spec:
+        raise Exception('No input_spec in class: %s' %
+                        self.__class__.__name__)
+
+    self.inputs = self.input_spec(**inputs)
+    self.estimated_memory_gb = 1
+    self.num_threads = 1
+
+    if from_file is not None:
+        self.load_inputs_from_json(from_file, overwrite=True)
+
+        for name, value in list(inputs.items()):
+            setattr(self.inputs, name, value)
 ```
 
-Back on your node shell:
+These are updated when building a pipeline:
 
-```bash
-$ singularity shell debian.img
+```python
+n1 = pe.Node(interface=SingleNodeTestInterface(), name='n1')
 
-> ls /om
-> exit
-
-$ vagrant destroy
+n1.interface.estimated_memory_gb = 4
+n1.interface.num_threads = 2
 ```
 
 ---
-### Using a GPU and installing an NVIDIA driver
+### Scheduling nodes
 
-[Example Singularity file](https://github.com/satra/om-images/blob/tensorflow-gpu/Singularity)
+Nodes are only selected to run when there is enough free memory and free processors to meet its needs. Nodes with larger requirements are prioritized to get them out of the way.
 
-I've already built it using Singularity Hub.
+```python
+# Sort jobs ready to run first by memory and then by number of threads
+# The most resource consuming jobs run first
+jobids = sorted(jobids,
+                key=lambda item: (self.procs[item]._interface.estimated_memory_gb,
+                                  self.procs[item]._interface.num_threads))
 
-```bash
-# Let's get a node with a GPU
-$ srun -N1 -c2 --gres=gpu:1 --pty bash
+if str2bool(config.get('execution', 'profile_runtime')):
+    logger.debug('Free memory (GB): %d, Free processors: %d',
+                 free_memory_gb, free_processors)
 
-# To pull from shub, we need a more bleeding version
-$ module rm openmind/singularity/2.2.1
-$ module add openmind/singularity/2.2.1-0ga71d50c
+# While have enough memory and processors for first job
+# Submit first job on the list
+for jobid in jobids:
+    if str2bool(config.get('execution', 'profile_runtime')):
+        logger.debug('Next Job: %d, memory (GB): %d, threads: %d' \
+                     % (jobid,
+                        self.procs[jobid]._interface.estimated_memory_gb,
+                        self.procs[jobid]._interface.num_threads))
 
-# Get the image from Singularity hub
-$ singularity shell -B /om:/om shub://satra/om-images:tensorflow-gpu
+    if self.procs[jobid]._interface.estimated_memory_gb <= free_memory_gb and \
+       self.procs[jobid]._interface.num_threads <= free_processors:
+        logger.info('Executing: %s ID: %d' %(self.procs[jobid]._id, jobid))
+        executing_now.append(self.procs[jobid])
 ```
 
-But instead of retrieving the image every time, we can use the image already on `/om`
-
-<code>
-$ singularity exec $SINGULARITY_CACHEDIR/shub/4982e62f95c389e9b4af2c88d24b1f83aac938dd.img /usr/bin/python $HOME/convolutional.py
-</code>
-
-.footnote[ .red[\*] We can share these images]
 ---
-class: middle center
+### Executing the workflow
 
+When executed, the plugin needs to know the total amount of memory and processors allocated for its execution.
+
+```python
+# Run workflow
+plugin_args = {'n_procs' : num_threads,
+               'memory_gb' : num_gb}
+wf.run(plugin='MultiProc', plugin_args=plugin_args)
+```
+
+---
+### Estimating resource needs
+
+- The ability of the MultiProc plugin to avoid out-of-memory errors and maximize utilization depends on how well the memory needs of a node are estimated.
+- A system profiler enables this information to be tracked.
+
+```python
+# Run workflow
+plugin_args = {'n_procs' : num_threads,
+               'memory_gb' : num_gb,
+               'status_callback' : log_nodes_cb}
+wf.run(plugin='MultiProc', plugin_args=plugin_args)
+```
+
+- The ```draw_gantt_chart.py``` utility will create a Gantt chart from the resulting log file.
+
+<img src="assets/gantt_chart.png" width=700>
+
+---
+### Multi-threading
+
+<img src="assets/thread_compare.png" width=700>
+<span style="font: normal 11pt Arial; line-height: 11pt;">Comparison of Python (C-PAC) and C (AFNI) implementations of degree centrality (DC) and local functional connectivity density (lFCD). Thr: number of threads, average and standard deviation are reported for memory usage (Mem) and execution time (T_D).</span>
+
+- ANTs, FreeSurfer, and AFNI use [OpenMP](http://www.openmp.org/) to parallelize computation
+
+- There is a trade-off between running multiple nodes in parallel or executing a single node using multiple threads
+
+  - Overhead such as file I/O may dominate time spent on voxel-wise calculations that can be parallelized, resulting in diminishing returns
+
+- But, memory used by these algorithms do not scale with thread count in the same way that it scales with running multiple nodes
+
+  - Multi-threading enables marginal speedups and better processor utilization when memory is limited
+
+---
+### Project ideas for improving Nipype's MultiProc Plugin's resource management
+
+- Replace variables containing memory and thread estimates with functions that estimate these values from inputs at runtime
+
+  - Create these functions for commonly used interfaces
+
+- Modify scheduler to dynamically configure the number of threads that a node uses at runtime based on memory usage and number of free processors
+
+- Update FSL DTI preprocessing pipeline to use resource manager and test
+
+- Create multi-proc plugin that can manage "bundles of pipelines" to improve resource utilization
+
+---
 # Questions
